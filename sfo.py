@@ -32,7 +32,7 @@ class Entry(Struct):
 		self.key_off   = Struct.uint16
 		self.unk1      = Struct.uint8
 		self.value_type      = Struct.uint8
-		self.unk3      = Struct.uint32
+		self.value_len      = Struct.uint32
 		self.str_len   = Struct.uint32
 		self.value_off = Struct.uint32
 	def __str__(self):
@@ -40,7 +40,7 @@ class Entry(Struct):
 		out += "[X] Key Offset: %04x\n" % self.key_off
 		out += "[ ] Unk1: %02x\n" % self.unk1
 		out += "[/] Value Type: %02x\n" % self.value_type
-		out += "[ ] Unk3: %08x\n" % self.unk3
+		out += "[X] Value Length: %08x\n" % self.value_len
 		out += "[X] String Length: %08x\n" % self.str_len
 		out += "[X] Value Offset: %08x" % self.value_off
 		return out
@@ -48,7 +48,7 @@ class Entry(Struct):
 		out  = ""
 		out += "[X] Key: '%s'[%04x]\n" % (nullterm(data[self.key_off + key_off:]), self.key_off)
 		out += "[/] Unks: %02x %02x\n" % (self.unk1,self.value_type)
-		out += "[ ] Unk3: %08x\n" % self.unk3
+		out += "[X] Value Length: %08x\n" % self.value_len
 		if self.value_type == 0x2:
 			out += "[X] Value: '%s'[%08x]" % (nullterm(data[self.value_off + value_off:self.value_off + value_off + self.str_len]), self.value_off+value_off)
 		elif self.value_type == 0x4:
