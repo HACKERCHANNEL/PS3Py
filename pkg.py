@@ -3,7 +3,13 @@ import struct
 import sys
 import hashlib
 import os
+import getopt
 
+TYPE_NPDRMSELF = 0x1
+TYPE_RAW = 0x3
+TYPE_DIRECTORY = 0x4
+
+debug = False
 class FileHeader(Struct):
 	__endian__ = Struct.BE
 	def __format__(self):
@@ -19,11 +25,11 @@ class FileHeader(Struct):
 	def __str__(self):
 		out  = ""
 		out += "[X] File Name: %s [" % self.fileName
-		if self.flags & 0xFF == 1:
+		if self.flags & 0xFF == TYPE_NPDRMSELF:
 			out += "NPDRM Self]\n"
-		elif self.flags & 0xFF == 4:
+		elif self.flags & 0xFF == TYPE_DIRECTORY:
 			out += "Directory]\n"
-		elif self.flags & 0xFF == 3:
+		elif self.flags & 0xFF == TYPE_RAW:
 			out += "Raw Data]\n"
 		else:
 			out += "Unknown\n"
@@ -64,19 +70,18 @@ class Header(Struct):
 		self.magic = Struct.uint32
 		self.type = Struct.uint32
 		self.pkgInfoOff = Struct.uint32
-		self.unk2 = Struct.uint32
+		self.drmType = Struct.uint32
 		
 		self.headSize = Struct.uint32
 		self.itemCount = Struct.uint32
-		self.unk4 = Struct.uint32
-		self.packageSize = Struct.uint32
+		self.packageSize = Struct.uint64
 		
 		self.dataOff = Struct.uint64
 		self.dataSize = Struct.uint64
 		
 		self.contentID = Struct.uint8[0x30]
 		self.QADigest = Struct.uint8[0x10]
-		self.UnkDigest = Struct.uint8[0x10]
+		self.EncryptionTest = Struct.uint8[0x10]
 		
 		
 		
@@ -85,12 +90,11 @@ class Header(Struct):
 		out += "[X] Magic: %08x\n" % self.magic
 		out += "[X] Type: %08x\n" % self.type
 		out += "[X] Offset to package info: %08x\n" % self.pkgInfoOff
-		out += "[ ] Unk2: %08x\n" % self.unk2
+		out += "[X] DRMType: %08x\n" % self.drmType
 		
 		out += "[X] Head Size: %08x\n" % self.headSize
 		out += "[X] Item Count: %08x\n" % self.itemCount
-		out += "[ ] Unk4: %08x\n" % self.unk4
-		out += "[X] Package Size: %08x\n" % self.packageSize
+		out += "[X] Package Size: %016x\n" % self.packageSize
 		
 		out += "[X] Data Offset: %016x\n" % self.dataOff
 		out += "[X] Data Size: %016x\n" % self.dataSize
@@ -98,7 +102,7 @@ class Header(Struct):
 		out += "[X] ContentID: '%s'\n" % (nullterm(self.contentID))
 		
 		out += "[X] QA_Digest: %s\n" % (nullterm(self.QADigest, True))
-		out += "[ ] Unk_Digest: %s\n" % (nullterm(self.UnkDigest, True))
+		out += "[ ] Encryption Test?: %s\n" % (nullterm(self.EncryptionTest, True))
 		
 		
 		return out
@@ -177,14 +181,8 @@ def SHA1(data):
 	m.update(data)
 	return m.digest()
 	
-def main():
-	debug = False
-	pretty = False
-	if "--debug" in sys.argv:
-		debug = True
-	if "--pretty" in sys.argv:
-		pretty = True
-	with open(sys.argv[1], 'rb') as fp:
+def unpack(filename):
+	with open(filename, 'rb') as fp:
 		data = fp.read()
 		offset = 0
 		header = Header()
@@ -198,9 +196,10 @@ def main():
 			context = keyToContext(header.QADigest)
 			
 			decData = crypt(context, dataEnc, header.dataSize)
+			directory = nullterm(header.contentID)
 			
 			try:
-				os.makedirs("OUTFILE")
+				os.makedirs(directory)
 			except Exception:
 				pass
 			fileDescs = []
@@ -209,17 +208,53 @@ def main():
 				fileD.unpack(decData[0x20 * i:0x20 * i + 0x20])
 				fileD.doWork(decData)
 				fileDescs.append(fileD)
-				print fileD
+				if debug:
+					print fileD
 				#context = keyToContext(header.QADigest)
-				fileD.dump("OUTFILE", decData, header)
-				
+				fileD.dump(directory, decData, header)
 				
 	
-	#with open("keycontext.bin", 'rb') as fp:
-	#	contents = fp.read()
-	#	m = hashlib.sha1()
-	#	m.update(contents)
-	#	print m.hexdigest()
-	#	print crypt(contents, )
+def usage():
+	print """usage: [based on revision 1061]
+
+    python pky.py config-file target-directory
+
+    python pky.py [options] npdrm-package
+        -l | --list             list packaged files.
+        -x | --extract          extract package.
+
+    python pky.py [options]
+        --version               print revision.
+        --help                  print this message."""
+
+def version():
+	print """pky.py 0.3"""
+	
+def main():
+	global debug
+	extract = False
+	
+	try:
+		opts, arg = getopt.getopt(sys.argv[1:], "he:dv", ["help", "extract=", "debug","version"])
+	except getopt.GetoptError:
+		usage()
+		sys.exit(2)
+	for opt, arg in opts:
+		if opt in ("-h", "--help"):
+			usage()
+			sys.exit(2)
+		elif opt in ("-v", "--version"):
+			version()
+			sys.exit(2)
+		elif opt in ("-e", "--extract"):
+			fileToExtract = arg
+			extract = True
+		elif opt in ("-d", "--debug"):
+			debug = True
+		else:
+			usage()
+			sys.exit(2)
+	if extract:
+		unpack(fileToExtract)
 if __name__ == "__main__":
 	main()
