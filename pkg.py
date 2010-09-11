@@ -18,6 +18,16 @@ class FileHeader(Struct):
 		self.unk3 		= Struct.uint32
 	def __str__(self):
 		out  = ""
+		out += "[X] File Name: %s [" % self.fileName
+		if self.flags & 0xFF == 1:
+			out += "NPDRM Self]\n"
+		elif self.flags & 0xFF == 4:
+			out += "Directory]\n"
+		elif self.flags & 0xFF == 3:
+			out += "Raw Data]\n"
+		else:
+			out += "Unknown\n"
+		out += "\n"
 		out += "[X] File Name offset: %08x\n" % self.fileNameOff
 		out += "[X] File Name Length: %08x\n" % self.fileNameLength
 		out += "[ ] Unk1: %08x\n" % self.unk1
@@ -26,9 +36,8 @@ class FileHeader(Struct):
 		out += "[ ] Unk2: %08x\n" % self.unk2
 		out += "[X] File Size: %08x\n" % self.fileSize
 		out += "[X] Flags: %08x\n" % self.flags
-		out += "[ ] Unk3: %08x\n" % self.unk3
-		out += "\n"
-		out += "[X] File Name: %s\n" % self.fileName
+		out += "[ ] Unk3: %08x\n\n" % self.unk3
+		
 		
 		
 		return out
@@ -37,7 +46,7 @@ class FileHeader(Struct):
 		self.fileName = ""
 	def doWork(self, decrypteddata):
 		self.fileName = nullterm(decrypteddata[self.fileNameOff:self.fileNameOff+self.fileNameLength])
-	def dump(self, directory, context, data, header):
+	def dump(self, directory, data, header):
 		if self.flags & 0xFF == 0x4:
 			try:
 				os.makedirs(directory + "/" + self.fileName)
@@ -45,28 +54,25 @@ class FileHeader(Struct):
 				print
 			
 		else:
-			fileData = crypt(context, data[header.fileListOff+self.fileOff:], self.fileSize)
 			tFile = open(directory + "/" + self.fileName, "wb")
-			tFile.write(fileData)
+			tFile.write(data[self.fileOff:self.fileOff+self.fileSize])
 			
 
 class Header(Struct):
 	__endian__ = Struct.BE
 	def __format__(self):
 		self.magic = Struct.uint32
-		self.unk1 = Struct.uint32
-		self.off1 = Struct.uint32
+		self.type = Struct.uint32
+		self.pkgInfoOff = Struct.uint32
 		self.unk2 = Struct.uint32
 		
-		self.unk3 = Struct.uint32
+		self.headSize = Struct.uint32
 		self.itemCount = Struct.uint32
 		self.unk4 = Struct.uint32
 		self.packageSize = Struct.uint32
 		
-		self.unk5 = Struct.uint32
-		self.fileListOff = Struct.uint32
-		self.unk6 = Struct.uint32
-		self.unk7 = Struct.uint32
+		self.dataOff = Struct.uint64
+		self.dataSize = Struct.uint64
 		
 		self.contentID = Struct.uint8[0x30]
 		self.QADigest = Struct.uint8[0x10]
@@ -77,19 +83,17 @@ class Header(Struct):
 	def __str__(self):
 		out  = ""
 		out += "[X] Magic: %08x\n" % self.magic
-		out += "[ ] Unk1: %08x\n" % self.unk1
-		out += "[ ] Unk Offset1: %08x\n" % self.off1
+		out += "[X] Type: %08x\n" % self.type
+		out += "[X] Offset to package info: %08x\n" % self.pkgInfoOff
 		out += "[ ] Unk2: %08x\n" % self.unk2
 		
-		out += "[ ] Unk3: %08x\n" % self.unk3
+		out += "[X] Head Size: %08x\n" % self.headSize
 		out += "[X] Item Count: %08x\n" % self.itemCount
 		out += "[ ] Unk4: %08x\n" % self.unk4
 		out += "[X] Package Size: %08x\n" % self.packageSize
 		
-		out += "[ ] Unk5: %08x\n" % self.unk5
-		out += "[X] File List Offset: %08x\n" % self.fileListOff
-		out += "[ ] Unk6: %08x\n" % self.unk6
-		out += "[ ] Unk7: %08x\n" % self.unk7
+		out += "[X] Data Offset: %016x\n" % self.dataOff
+		out += "[X] Data Size: %016x\n" % self.dataSize
 		
 		out += "[X] ContentID: '%s'\n" % (nullterm(self.contentID))
 		
@@ -167,7 +171,6 @@ def crypt(key, inbuf, length):
 			offset += 1
 		manipulate(key)
 		length -= bytes_to_dump
-	print key
 	return ret
 def SHA1(data):
 	m = hashlib.sha1()
@@ -191,14 +194,11 @@ def main():
 			print
 		
 		if header.itemCount > 0:
-			fileListEnc = data[header.fileListOff:]
+			dataEnc = data[header.dataOff:header.dataOff+header.dataSize]
 			context = keyToContext(header.QADigest)
 			
-			fileDescData = crypt(context, fileListEnc, 0x20)
-			tmp = FileHeader()
-			tmp.unpack(fileDescData)
-			totalLength = tmp.fileOff
-			fileDescData += crypt(context, fileListEnc[0x20:], totalLength-0x20)
+			decData = crypt(context, dataEnc, header.dataSize)
+			
 			try:
 				os.makedirs("OUTFILE")
 			except Exception:
@@ -206,12 +206,12 @@ def main():
 			fileDescs = []
 			for i in range(0, header.itemCount):
 				fileD = FileHeader()
-				fileD.unpack(fileDescData[0x20 * i:0x20 * i + 0x20])
-				fileD.doWork(fileDescData)
+				fileD.unpack(decData[0x20 * i:0x20 * i + 0x20])
+				fileD.doWork(decData)
 				fileDescs.append(fileD)
 				print fileD
 				#context = keyToContext(header.QADigest)
-				fileD.dump("OUTFILE", context, data, header)
+				fileD.dump("OUTFILE", decData, header)
 				
 				
 	
