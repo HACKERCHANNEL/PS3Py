@@ -70,7 +70,7 @@ class Header(Struct):
 		self.magic = Struct.uint32
 		self.type = Struct.uint32
 		self.pkgInfoOff = Struct.uint32
-		self.drmType = Struct.uint32
+		self.unk1 = Struct.uint32
 		
 		self.headSize = Struct.uint32
 		self.itemCount = Struct.uint32
@@ -90,7 +90,7 @@ class Header(Struct):
 		out += "[X] Magic: %08x\n" % self.magic
 		out += "[X] Type: %08x\n" % self.type
 		out += "[X] Offset to package info: %08x\n" % self.pkgInfoOff
-		out += "[X] DRMType: %08x\n" % self.drmType
+		out += "[ ] unk1: %08x\n" % self.unk1
 		
 		out += "[X] Head Size: %08x\n" % self.headSize
 		out += "[X] Item Count: %08x\n" % self.itemCount
