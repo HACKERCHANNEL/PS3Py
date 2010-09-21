@@ -1,57 +1,106 @@
+#!/usr/bin/env python
 from Struct import Struct
 import struct
 import sys
 import hashlib
 import os
 import getopt
+import ConfigParser
+import io
+import glob
 
 TYPE_NPDRMSELF = 0x1
 TYPE_RAW = 0x3
 TYPE_DIRECTORY = 0x4
 
+TYPE_OVERWRITE_ALLOWED = 0x80000000
+
 debug = False
+
+class EbootMeta(Struct):
+	__endian__ = Struct.BE
+	def __format__(self):
+		self.magic 			= Struct.uint32
+		self.unk1 			= Struct.uint32
+		self.drmType 		= Struct.uint32
+		self.unk2			= Struct.uint32
+		self.contentID 		= Struct.uint8[0x30]
+		self.fileSHA1 		= Struct.uint8[0x10]
+		self.notSHA1 		= Struct.uint8[0x10]
+		self.notXORKLSHA1 	= Struct.uint8[0x10]
+		self.nulls 			= Struct.uint8[0x10]
+class MetaHeader(Struct):
+	__endian__ = Struct.BE
+	def __format__(self):
+		self.unk1 	= Struct.uint32
+		self.unk2 	= Struct.uint32
+		self.drmType 	= Struct.uint32
+		self.unk4 	= Struct.uint32
+		
+		self.unk21 	= Struct.uint32
+		self.unk22 	= Struct.uint32
+		self.unk23 	= Struct.uint32
+		self.unk24 	= Struct.uint32
+		
+		self.unk31 	= Struct.uint32
+		self.unk32 	= Struct.uint32
+		self.unk33 	= Struct.uint32
+		self.secondaryVersion 	= Struct.uint16
+		self.unk34 	= Struct.uint16
+		
+		self.dataSize 	= Struct.uint32
+		self.unk42 	= Struct.uint32
+		self.unk43 	= Struct.uint32
+		self.packagedBy 	= Struct.uint16
+		self.packageVersion 	= Struct.uint16
 class FileHeader(Struct):
 	__endian__ = Struct.BE
 	def __format__(self):
 		self.fileNameOff 	= Struct.uint32
 		self.fileNameLength = Struct.uint32
-		self.unk1 			= Struct.uint32
-		self.fileOff 		= Struct.uint32
+		self.fileOff 		= Struct.uint64
 		
-		self.unk2		= Struct.uint32
-		self.fileSize 	= Struct.uint32
+		self.fileSize 	= Struct.uint64
 		self.flags		= Struct.uint32
-		self.unk3 		= Struct.uint32
+		self.padding 		= Struct.uint32
 	def __str__(self):
 		out  = ""
 		out += "[X] File Name: %s [" % self.fileName
 		if self.flags & 0xFF == TYPE_NPDRMSELF:
-			out += "NPDRM Self]\n"
+			out += "NPDRM Self]"
 		elif self.flags & 0xFF == TYPE_DIRECTORY:
-			out += "Directory]\n"
+			out += "Directory]"
 		elif self.flags & 0xFF == TYPE_RAW:
-			out += "Raw Data]\n"
+			out += "Raw Data]"
 		else:
-			out += "Unknown\n"
+			out += "Unknown]"
+		if (self.flags & TYPE_OVERWRITE_ALLOWED ) != 0:
+			out += " Overwrite allowed.\n"
+		else:
+			out += " Overwrite NOT allowed.\n"
 		out += "\n"
+		
 		out += "[X] File Name offset: %08x\n" % self.fileNameOff
 		out += "[X] File Name Length: %08x\n" % self.fileNameLength
-		out += "[ ] Unk1: %08x\n" % self.unk1
-		out += "[X] Offset To File Data: %08x\n" % self.fileOff
+		out += "[X] Offset To File Data: %016x\n" % self.fileOff
 		
-		out += "[ ] Unk2: %08x\n" % self.unk2
-		out += "[X] File Size: %08x\n" % self.fileSize
+		out += "[X] File Size: %016x\n" % self.fileSize
 		out += "[X] Flags: %08x\n" % self.flags
-		out += "[ ] Unk3: %08x\n\n" % self.unk3
-		
+		out += "[X] Padding: %08x\n\n" % self.padding
+		assert self.padding == 0, "I guess I was wrong, this is not padding."
 		
 		
 		return out
+	def __repr__(self):
+		return self.fileName + ("<FileHeader> Size: 0x%016x" % self.fileSize)
 	def __init__(self):
 		Struct.__init__(self)
 		self.fileName = ""
-	def doWork(self, decrypteddata):
-		self.fileName = nullterm(decrypteddata[self.fileNameOff:self.fileNameOff+self.fileNameLength])
+	def doWork(self, decrypteddata, context = None):
+		if context == None:
+			self.fileName = nullterm(decrypteddata[self.fileNameOff:self.fileNameOff+self.fileNameLength])
+		else:
+			self.fileName = nullterm(crypt(context, decrypteddata[self.fileNameOff:self.fileNameOff+self.fileNameLength], self.fileNameLength))
 	def dump(self, directory, data, header):
 		if self.flags & 0xFF == 0x4:
 			try:
@@ -81,11 +130,15 @@ class Header(Struct):
 		
 		self.contentID = Struct.uint8[0x30]
 		self.QADigest = Struct.uint8[0x10]
-		self.EncryptionTest = Struct.uint8[0x10]
+		self.KLicensee = Struct.uint8[0x10]
 		
 		
 		
 	def __str__(self):
+		context = keyToContext(self.QADigest)
+		setContextNum(context, 0xFFFFFFFFFFFFFFFF)
+		licensee = crypt(context, listToString(self.KLicensee), 0x10)
+		
 		out  = ""
 		out += "[X] Magic: %08x\n" % self.magic
 		out += "[X] Type: %08x\n" % self.type
@@ -102,7 +155,7 @@ class Header(Struct):
 		out += "[X] ContentID: '%s'\n" % (nullterm(self.contentID))
 		
 		out += "[X] QA_Digest: %s\n" % (nullterm(self.QADigest, True))
-		out += "[ ] Encryption Test?: %s\n" % (nullterm(self.EncryptionTest, True))
+		out += "[X] K Licensee: %s\n" % licensee.encode('hex')
 		
 		
 		return out
@@ -150,6 +203,9 @@ def manipulate(key):
 	
 	tmpnum = struct.unpack('>Q', tmp)[0]
 	tmpnum += 1
+	tmpnum = tmpnum & 0xFFFFFFFFFFFFFFFF
+	setContextNum(key, tmpnum)
+def setContextNum(key, tmpnum):
 	tmpchrs = struct.pack('>Q', tmpnum)
 	
 	key[0x38] = ord(tmpchrs[0])
@@ -181,6 +237,50 @@ def SHA1(data):
 	m.update(data)
 	return m.digest()
 	
+def listPkg(filename):
+	with open(filename, 'rb') as fp:
+		data = fp.read()
+		offset = 0
+		header = Header()
+		header.unpack(data[offset:offset+len(header)])
+		print header
+		print
+		
+		assert header.type == 0x00000001, 'Unsupported Type'
+		if header.itemCount > 0:
+			print 'Listing: "' + filename + '"'
+			print "+) overwrite, -) no overwrite"
+			print
+			dataEnc = data[header.dataOff:header.dataOff+header.dataSize]
+			context = keyToContext(header.QADigest)
+			
+			decData = crypt(context, dataEnc, len(FileHeader())*header.itemCount)
+			
+			fileDescs = []
+			for i in range(0, header.itemCount):
+				fileD = FileHeader()
+				fileD.unpack(decData[0x20 * i:0x20 * i + 0x20])
+				fileDescs.append(fileD)
+			for fileD in fileDescs:
+				fileD.doWork(dataEnc, context)
+				out = ""
+				if fileD.flags & 0xFF == TYPE_NPDRMSELF:
+					out += " NPDRM SELF:"
+				elif fileD.flags & 0xFF == TYPE_DIRECTORY:
+					out += "  directory:"
+				elif fileD.flags & 0xFF == TYPE_RAW:
+					out += "   raw data:"
+				else:
+					out += "    unknown:"
+				if (fileD.flags & TYPE_OVERWRITE_ALLOWED ) != 0:
+					out += "+"
+				else:
+					out += "-"
+				out += "%11d: " % fileD.fileSize
+				out += fileD.fileName
+				print out,
+				print
+				#print fileD
 def unpack(filename):
 	with open(filename, 'rb') as fp:
 		data = fp.read()
@@ -191,13 +291,13 @@ def unpack(filename):
 			print header
 			print
 		
+		assert header.type == 0x00000001, 'Unsupported Type'
 		if header.itemCount > 0:
 			dataEnc = data[header.dataOff:header.dataOff+header.dataSize]
 			context = keyToContext(header.QADigest)
 			
 			decData = crypt(context, dataEnc, header.dataSize)
 			directory = nullterm(header.contentID)
-			
 			try:
 				os.makedirs(directory)
 			except Exception:
@@ -210,14 +310,232 @@ def unpack(filename):
 				fileDescs.append(fileD)
 				if debug:
 					print fileD
-				#context = keyToContext(header.QADigest)
 				fileD.dump(directory, decData, header)
+def getFiles(files, folder, bob=True):
+	foundFiles = glob.glob( os.path.join(folder, '*') )
+	foundFiles.sort()
+	if bob:
+		foundFiles.reverse()
+	sortedList = []
+	for filepath in foundFiles:
+		if not os.path.isdir(filepath):
+			sortedList.append(filepath)
+	for filepath in foundFiles:
+		if os.path.isdir(filepath):
+			sortedList.append(filepath)
+	for filepath in sortedList:
+		newpath = filepath.replace("\\", "/")
+		newpath = "/".join(newpath.split("/")[1:])
+		if os.path.isdir(filepath):
+			folder = FileHeader()
+			folder.fileName = newpath
+			folder.fileNameOff 	= 0
+			folder.fileNameLength = len(folder.fileName)
+			folder.fileOff 		= 0
+			
+			folder.fileSize 	= 0
+			folder.flags		= TYPE_OVERWRITE_ALLOWED | TYPE_DIRECTORY
+			folder.padding 		= 0
+			files.append(folder)
+			getFiles(files, filepath, False)
+		else:
+			file = FileHeader()
+			file.fileName = newpath
+			file.fileNameOff 	= 0
+			file.fileNameLength = len(file.fileName)
+			file.fileOff 		= 0
+			file.fileSize 	= os.path.getsize(filepath)
+			file.flags		= TYPE_OVERWRITE_ALLOWED | TYPE_RAW
+			if newpath == "USRDIR/EBOOT.BIN":
+				file.fileSize = ((file.fileSize - 0x30 + 63) & ~63) + 0x30
+				file.flags		= TYPE_OVERWRITE_ALLOWED | TYPE_NPDRMSELF
+			
+			file.padding 		= 0
+			files.append(file)
+			
+def pack(configfile, folder, outname=None):
+	configfp = open(configfile, 'r')
+	
+	config = ConfigParser.ConfigParser()
+	config.readfp(io.BytesIO("[main]\r\n" + configfp.read()))
+	configfp.close()
+	
+	try:
+		contentid = config.get('main', "content_id")
+		klicensee = config.get('main', "k_licensee").decode('hex')
+		contenttype = config.get('main', "contenttype")
+	except Exception as e:
+		print configfile + " is not valid:\n" + e.message
+	qadigest = hashlib.sha1()
+	
+	header = Header()
+	header.magic = 0x7F504B47
+	header.type = 0x01
+	header.pkgInfoOff = 0xC0
+	header.unk1 = 0x05
+	
+	header.headSize = 0x80
+	header.itemCount = 0
+	header.packageSize = 0
+	
+	header.dataOff = 0x140
+	header.dataSize = 0
+	
+	for i in range(0, 0x30):
+		header.contentID[i] = 0
+	
+	for i in range(0,0x10):
+		header.QADigest[i] = 0
+		header.KLicensee[i] = 0
+	for i in range(0, min(0x10, len(klicensee))):
+		header.KLicensee[i] = ord(klicensee[i])
+	
+	
+	metaBlock = MetaHeader()
+	metaBlock.unk1 		= 1 #doesnt change output of --extract
+	metaBlock.unk2 		= 4 #doesnt change output of --extract
+	metaBlock.drmType 	= 2 #1 = Network, 2 = Local, 3 = Free, anything else = unknown
+	metaBlock.unk4 		= 2 
+	
+	metaBlock.unk21 	= 4
+	metaBlock.unk22 	= 5 #5 == gameexec, 4 == gamedata
+	metaBlock.unk23 	= 3
+	metaBlock.unk24 	= 4
+	
+	metaBlock.unk31 	= 0xE   #packageType 0x10 == patch, 0x8 == Demo&Key, 0x0 == Demo&Key (AND UserFiles = NotOverWrite), 0xE == normal, use 0xE for gamexec, and 8 for gamedata
+	metaBlock.unk32 	= 4   #when this is 5 secondary version gets used??
+	metaBlock.unk33 	= 8   #doesnt change output of --extract
+	metaBlock.secondaryVersion 	= 0
+	metaBlock.unk34 	= 0
+	
+	metaBlock.dataSize 	= 0
+	metaBlock.unk42 	= 5
+	metaBlock.unk43 	= 4
+	metaBlock.packagedBy 	= 0x1061
+	metaBlock.packageVersion 	= 0
+	
+	
+	files = []
+	
+	file = FileHeader()
+	file.fileName = "PS3LOGO.DAT"
+	file.fileNameOff 	= 0
+	file.fileNameLength = len(file.fileName)
+	file.fileOff 		= 0
+	file.fileSize 	= 0x1400
+	file.flags		= TYPE_OVERWRITE_ALLOWED | TYPE_RAW
+	file.padding 		= 0
+	files.append(file)
+	
+	getFiles(files, folder)
+	header.itemCount = len(files)
+	dataToEncrypt = ""
+	fileDescLength = 0
+	fileOff = 0x20 * len(files)
+	for file in files:
+		alignedSize = (file.fileNameLength + 0x0F) & ~0x0F
+		file.fileNameOff = fileOff
+		fileOff += alignedSize
+	for file in files:
+		file.fileOff = fileOff
+		fileOff += (file.fileSize + 0x0F) & ~0x0F
+		dataToEncrypt += file.pack()
+	for file in files:
+		alignedSize = (file.fileNameLength + 0x0F) & ~0x0F
+		dataToEncrypt += file.fileName
+		dataToEncrypt += "\0" * (alignedSize-file.fileNameLength)
+	fileDescLength = len(dataToEncrypt)
+	for file in files:
+		if not file.flags & 0xFF == TYPE_DIRECTORY:
+			path = os.path.join(folder, file.fileName)
+			if file.fileName == "PS3LOGO.DAT":
+				path = "PS3LOGO.DAT"
+			fp = open(path, 'rb')
+			fileData = fp.read()
+			qadigest.update(fileData)
+			fileSHA1 = SHA1(fileData)
+			fp.close()
+			if file.fileName == "USRDIR/EBOOT.BIN":
 				
+				dataToEncrypt += fileData[0:0x440]
+				
+				meta = EbootMeta()
+				meta.magic = 0x4E504400
+				meta.unk1 			= 1
+				meta.drmType 		= metaBlock.drmType
+				meta.unk2			= 1
+				for i in range(0,min(len(contentid), 0x30)):
+					meta.contentID[i] = ord(contentid[i])
+				for i in range(0,0x10):
+					meta.fileSHA1[i] 		= ord(fileSHA1[i])
+					meta.notSHA1[i] 		= (~meta.fileSHA1[i]) & 0xFF
+					if i == 0xF:
+						meta.notXORKLSHA1[i] 	= (1 ^ meta.notSHA1[i] ^ 0xAA) & 0xFF
+					else:
+						meta.notXORKLSHA1[i] 	= (0 ^ meta.notSHA1[i] ^ 0xAA) & 0xFF
+					meta.nulls[i] 			= 0
+				dataToEncrypt += meta.pack()
+				dataToEncrypt += fileData[0x440 + 0x80:]
+				
+			else:
+				dataToEncrypt += fileData
+			
+			dataToEncrypt += '\0' * (((file.fileSize + 0x0F) & ~0x0F) - len(fileData))
+	header.dataSize = len(dataToEncrypt)
+	metaBlock.dataSize 	= header.dataSize
+	header.packageSize = header.dataSize + 0x1A0
+	head = header.pack()
+	qadigest.update(head)
+	qadigest.update(dataToEncrypt[0:fileDescLength])
+	QA_Digest = qadigest.digest()
+	
+	for i in range(0, 0x10):
+		header.QADigest[i] = ord(QA_Digest[i])
+		
+	for i in range(0, min(len(contentid), 0x30)):
+		header.contentID[i] = ord(contentid[i])
+	
+	context = keyToContext(header.QADigest)
+	setContextNum(context, 0xFFFFFFFFFFFFFFFF)
+	licensee = crypt(context, listToString(header.KLicensee), 0x10)
+	
+	for i in range(0, min(len(contentid), 0x10)):
+		header.KLicensee[i] = ord(licensee[i])
+	
+	if outname != None:
+		outFile = open(outname, 'wb')
+	else:
+		outFile = open(contentid + ".pkg", 'wb')
+	outFile.write(header.pack())
+	headerSHA = SHA1(header.pack())[3:19]
+	outFile.write(headerSHA)
+	
+	
+	metaData = metaBlock.pack()
+	metaBlockSHA = SHA1(metaData)[3:19]
+	metaBlockSHAPad = '\0' * 0x30
+	
+	context = keyToContext([ord(c) for c in metaBlockSHA])
+	metaBlockSHAPadEnc = crypt(context, metaBlockSHAPad, 0x30)
+	
+	context = keyToContext([ord(c) for c in headerSHA])
+	metaBlockSHAPadEnc2 = crypt(context, metaBlockSHAPadEnc, 0x30)
+	outFile.write(metaBlockSHAPadEnc2)
+	outFile.write(metaData)
+	outFile.write(metaBlockSHA)
+	outFile.write(metaBlockSHAPadEnc)
+	
+	context = keyToContext(header.QADigest)
+	encData = crypt(context, dataToEncrypt, header.dataSize)
+	outFile.write(encData)
+	outFile.write('\0' * 0x60)
+	outFile.close()
+	print header
 	
 def usage():
 	print """usage: [based on revision 1061]
 
-    python pky.py config-file target-directory
+    python pky.py config-file target-directory [out-file]
 
     python pky.py [options] npdrm-package
         -l | --list             list packaged files.
@@ -228,14 +546,14 @@ def usage():
         --help                  print this message."""
 
 def version():
-	print """pky.py 0.3"""
-	
+	print """pky.py 0.5"""
+
 def main():
 	global debug
 	extract = False
-	
+	list = False
 	try:
-		opts, arg = getopt.getopt(sys.argv[1:], "he:dv", ["help", "extract=", "debug","version"])
+		opts, args = getopt.getopt(sys.argv[1:], "hx:dvl:", ["help", "extract=", "debug","version", "list="])
 	except getopt.GetoptError:
 		usage()
 		sys.exit(2)
@@ -246,9 +564,12 @@ def main():
 		elif opt in ("-v", "--version"):
 			version()
 			sys.exit(2)
-		elif opt in ("-e", "--extract"):
+		elif opt in ("-x", "--extract"):
 			fileToExtract = arg
 			extract = True
+		elif opt in ("-l", "--list"):
+			fileToList = arg
+			list = True
 		elif opt in ("-d", "--debug"):
 			debug = True
 		else:
@@ -256,5 +577,15 @@ def main():
 			sys.exit(2)
 	if extract:
 		unpack(fileToExtract)
+	elif list:
+		listPkg(fileToList)
+	else:
+		if len(args) == 2:
+			pack(args[0], args[1])
+		elif len(args) == 3:
+			pack(args[0], args[1], args[2])
+		else:
+			usage()
+			sys.exit(2)
 if __name__ == "__main__":
 	main()

@@ -1,3 +1,4 @@
+#!/usr/bin/env python
 from Struct import Struct
 import struct
 import sys
