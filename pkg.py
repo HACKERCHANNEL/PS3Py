@@ -1,4 +1,5 @@
 #!/usr/bin/env python
+from __future__ import with_statement
 from Struct import Struct
 import struct
 import sys
@@ -105,7 +106,7 @@ class FileHeader(Struct):
 		if self.flags & 0xFF == 0x4:
 			try:
 				os.makedirs(directory + "/" + self.fileName)
-			except Exception:
+			except Exception, e:
 				print
 			
 		else:
@@ -300,7 +301,7 @@ def unpack(filename):
 			directory = nullterm(header.contentID)
 			try:
 				os.makedirs(directory)
-			except Exception:
+			except Exception, e:
 				pass
 			fileDescs = []
 			for i in range(0, header.itemCount):
@@ -364,7 +365,7 @@ def pack(configfile, folder, outname=None):
 		contentid = config.get('main', "content_id")
 		klicensee = config.get('main', "k_licensee").decode('hex')
 		contenttype = config.get('main', "contenttype")
-	except Exception as e:
+	except Exception, e:
 		print configfile + " is not valid:\n" + e.message
 	qadigest = hashlib.sha1()
 	
@@ -535,13 +536,13 @@ def pack(configfile, folder, outname=None):
 def usage():
 	print """usage: [based on revision 1061]
 
-    python pky.py config-file target-directory [out-file]
+    python pkg.py config-file target-directory [out-file]
 
-    python pky.py [options] npdrm-package
+    python pkg.py [options] npdrm-package
         -l | --list             list packaged files.
         -x | --extract          extract package.
 
-    python pky.py [options]
+    python pkg.py [options]
         --version               print revision.
         --help                  print this message."""
 
