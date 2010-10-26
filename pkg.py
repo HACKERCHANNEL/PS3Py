@@ -1,6 +1,8 @@
 #!/usr/bin/env python
 from __future__ import with_statement
 from Struct import Struct
+from fself import SelfHeader, AppInfo
+
 import struct
 import sys
 import hashlib
@@ -54,6 +56,12 @@ class MetaHeader(Struct):
 		self.unk43 	= Struct.uint32
 		self.packagedBy 	= Struct.uint16
 		self.packageVersion 	= Struct.uint16
+class DigestBlock(Struct):
+	__endian__ = Struct.BE
+	def __format__(self):
+		self.type 	= Struct.uint32
+		self.size 	= Struct.uint32
+		self.isNext = Struct.uint64
 class FileHeader(Struct):
 	__endian__ = Struct.BE
 	def __format__(self):
@@ -312,11 +320,8 @@ def unpack(filename):
 				if debug:
 					print fileD
 				fileD.dump(directory, decData, header)
-def getFiles(files, folder, bob=True):
+def getFiles(files, folder):
 	foundFiles = glob.glob( os.path.join(folder, '*') )
-	foundFiles.sort()
-	if bob:
-		foundFiles.reverse()
 	sortedList = []
 	for filepath in foundFiles:
 		if not os.path.isdir(filepath):
@@ -338,7 +343,7 @@ def getFiles(files, folder, bob=True):
 			folder.flags		= TYPE_OVERWRITE_ALLOWED | TYPE_DIRECTORY
 			folder.padding 		= 0
 			files.append(folder)
-			getFiles(files, filepath, False)
+			getFiles(files, filepath)
 		else:
 			file = FileHeader()
 			file.fileName = newpath
@@ -395,7 +400,7 @@ def pack(configfile, folder, outname=None):
 	metaBlock = MetaHeader()
 	metaBlock.unk1 		= 1 #doesnt change output of --extract
 	metaBlock.unk2 		= 4 #doesnt change output of --extract
-	metaBlock.drmType 	= 2 #1 = Network, 2 = Local, 3 = Free, anything else = unknown
+	metaBlock.drmType 	= 3 #1 = Network, 2 = Local, 3 = Free, anything else = unknown
 	metaBlock.unk4 		= 2 
 	
 	metaBlock.unk21 	= 4
@@ -417,17 +422,6 @@ def pack(configfile, folder, outname=None):
 	
 	
 	files = []
-	
-	file = FileHeader()
-	file.fileName = "PS3LOGO.DAT"
-	file.fileNameOff 	= 0
-	file.fileNameLength = len(file.fileName)
-	file.fileOff 		= 0
-	file.fileSize 	= 0x1400
-	file.flags		= TYPE_OVERWRITE_ALLOWED | TYPE_RAW
-	file.padding 		= 0
-	files.append(file)
-	
 	getFiles(files, folder)
 	header.itemCount = len(files)
 	dataToEncrypt = ""
@@ -449,35 +443,50 @@ def pack(configfile, folder, outname=None):
 	for file in files:
 		if not file.flags & 0xFF == TYPE_DIRECTORY:
 			path = os.path.join(folder, file.fileName)
-			if file.fileName == "PS3LOGO.DAT":
-				path = "PS3LOGO.DAT"
 			fp = open(path, 'rb')
 			fileData = fp.read()
 			qadigest.update(fileData)
 			fileSHA1 = SHA1(fileData)
 			fp.close()
-			if file.fileName == "USRDIR/EBOOT.BIN":
-				
-				dataToEncrypt += fileData[0:0x440]
-				
-				meta = EbootMeta()
-				meta.magic = 0x4E504400
-				meta.unk1 			= 1
-				meta.drmType 		= metaBlock.drmType
-				meta.unk2			= 1
-				for i in range(0,min(len(contentid), 0x30)):
-					meta.contentID[i] = ord(contentid[i])
-				for i in range(0,0x10):
-					meta.fileSHA1[i] 		= ord(fileSHA1[i])
-					meta.notSHA1[i] 		= (~meta.fileSHA1[i]) & 0xFF
-					if i == 0xF:
-						meta.notXORKLSHA1[i] 	= (1 ^ meta.notSHA1[i] ^ 0xAA) & 0xFF
+			if fileData[0:9] == "SCE\0\0\0\0\x02\x80":
+				fselfheader = SelfHeader()
+				fselfheader.unpack(fileData[0:len(fselfheader)])
+				appheader = AppInfo()
+				appheader.unpack(fileData[fselfheader.AppInfo:fselfheader.AppInfo+len(appheader)])
+				found = False
+				digestOff = fselfheader.digest
+				while not found:
+					digest = DigestBlock()
+					digest.unpack(fileData[digestOff:digestOff+len(digest)])
+					if digest.type == 3:
+						found = True
 					else:
-						meta.notXORKLSHA1[i] 	= (0 ^ meta.notSHA1[i] ^ 0xAA) & 0xFF
-					meta.nulls[i] 			= 0
-				dataToEncrypt += meta.pack()
-				dataToEncrypt += fileData[0x440 + 0x80:]
-				
+						digestOff += digest.size
+					if digest.isNext != 1:
+						break
+				digestOff += len(digest)
+				if appheader.appType == 8 and found:
+					dataToEncrypt += fileData[0:digestOff]
+					
+					meta = EbootMeta()
+					meta.magic = 0x4E504400
+					meta.unk1 			= 1
+					meta.drmType 		= metaBlock.drmType
+					meta.unk2			= 1
+					for i in range(0,min(len(contentid), 0x30)):
+						meta.contentID[i] = ord(contentid[i])
+					for i in range(0,0x10):
+						meta.fileSHA1[i] 		= ord(fileSHA1[i])
+						meta.notSHA1[i] 		= (~meta.fileSHA1[i]) & 0xFF
+						if i == 0xF:
+							meta.notXORKLSHA1[i] 	= (1 ^ meta.notSHA1[i] ^ 0xAA) & 0xFF
+						else:
+							meta.notXORKLSHA1[i] 	= (0 ^ meta.notSHA1[i] ^ 0xAA) & 0xFF
+						meta.nulls[i] 			= 0
+					dataToEncrypt += meta.pack()
+					dataToEncrypt += fileData[digestOff + 0x80:]
+				else:
+					dataToEncrypt += fileData
 			else:
 				dataToEncrypt += fileData
 			
