@@ -320,7 +320,8 @@ def unpack(filename):
 				if debug:
 					print fileD
 				fileD.dump(directory, decData, header)
-def getFiles(files, folder):
+def getFiles(files, folder, original):
+	oldfolder = folder
 	foundFiles = glob.glob( os.path.join(folder, '*') )
 	sortedList = []
 	for filepath in foundFiles:
@@ -331,7 +332,7 @@ def getFiles(files, folder):
 			sortedList.append(filepath)
 	for filepath in sortedList:
 		newpath = filepath.replace("\\", "/")
-		newpath = "/".join(newpath.split("/")[1:])
+		newpath = newpath[len(original):]
 		if os.path.isdir(filepath):
 			folder = FileHeader()
 			folder.fileName = newpath
@@ -343,7 +344,7 @@ def getFiles(files, folder):
 			folder.flags		= TYPE_OVERWRITE_ALLOWED | TYPE_DIRECTORY
 			folder.padding 		= 0
 			files.append(folder)
-			getFiles(files, filepath)
+			getFiles(files, filepath, original)
 		else:
 			file = FileHeader()
 			file.fileName = newpath
@@ -359,19 +360,8 @@ def getFiles(files, folder):
 			file.padding 		= 0
 			files.append(file)
 			
-def pack(configfile, folder, outname=None):
-	configfp = open(configfile, 'r')
-	
-	config = ConfigParser.ConfigParser()
-	config.readfp(io.BytesIO("[main]\r\n" + configfp.read()))
-	configfp.close()
-	
-	try:
-		contentid = config.get('main', "content_id")
-		klicensee = config.get('main', "k_licensee").decode('hex')
-		contenttype = config.get('main', "contenttype")
-	except Exception, e:
-		print configfile + " is not valid:\n" + e.message
+def pack(folder, contentid, outname=None):
+
 	qadigest = hashlib.sha1()
 	
 	header = Header()
@@ -393,8 +383,6 @@ def pack(configfile, folder, outname=None):
 	for i in range(0,0x10):
 		header.QADigest[i] = 0
 		header.KLicensee[i] = 0
-	for i in range(0, min(0x10, len(klicensee))):
-		header.KLicensee[i] = ord(klicensee[i])
 	
 	
 	metaBlock = MetaHeader()
@@ -422,7 +410,7 @@ def pack(configfile, folder, outname=None):
 	
 	
 	files = []
-	getFiles(files, folder)
+	getFiles(files, folder, folder)
 	header.itemCount = len(files)
 	dataToEncrypt = ""
 	fileDescLength = 0
@@ -545,7 +533,7 @@ def pack(configfile, folder, outname=None):
 def usage():
 	print """usage: [based on revision 1061]
 
-    python pkg.py config-file target-directory [out-file]
+    python pkg.py target-directory [out-file]
 
     python pkg.py [options] npdrm-package
         -l | --list             list packaged files.
@@ -562,8 +550,9 @@ def main():
 	global debug
 	extract = False
 	list = False
+	contentid = None
 	try:
-		opts, args = getopt.getopt(sys.argv[1:], "hx:dvl:", ["help", "extract=", "debug","version", "list="])
+		opts, args = getopt.getopt(sys.argv[1:], "hx:dvl:c:", ["help", "extract=", "debug","version", "list=", "contentid="])
 	except getopt.GetoptError:
 		usage()
 		sys.exit(2)
@@ -582,6 +571,8 @@ def main():
 			list = True
 		elif opt in ("-d", "--debug"):
 			debug = True
+		elif opt in ("-c", "--contentid"):
+			contentid = arg
 		else:
 			usage()
 			sys.exit(2)
@@ -590,10 +581,10 @@ def main():
 	elif list:
 		listPkg(fileToList)
 	else:
-		if len(args) == 2:
-			pack(args[0], args[1])
-		elif len(args) == 3:
-			pack(args[0], args[1], args[2])
+		if len(args) == 1 and contentid != None:
+			pack(args[0], contentid)
+		elif len(args) == 2 and contentid != None:
+			pack(args[0], contentid, args[1])
 		else:
 			usage()
 			sys.exit(2)

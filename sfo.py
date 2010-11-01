@@ -71,7 +71,6 @@ class Entry(Struct):
 	
 def usage():
 	print """usage:
-
     python sfo.py"""
 
 def version():
@@ -144,11 +143,11 @@ def convertToXml(sfofile, xml):
 			valuenode = doc.createElement("value")
 			valuenode.setAttribute("name", key)
 			if entry.value_type == SFO_STRING:
-				value = nullterm(data[off2+entry.value_off:off2+entry.value_off+entry.str_len])
+				value = nullterm(data[off2+entry.value_off:])
 				valuenode.setAttribute("type", "string")
 				valuenode.appendChild(doc.createTextNode(value))
 			else:
-				value = struct.unpack('<I', data[entry.value_off + off2:entry.value_off + off2 + entry.str_len])[0]
+				value = struct.unpack('<I', data[entry.value_off + off2:entry.value_off + off2 + 4])[0]
 				valuenode.setAttribute("type", "integer")
 				valuenode.appendChild(doc.createTextNode("%d" % value))
 			sfo.appendChild(valuenode)
@@ -158,7 +157,6 @@ def convertToXml(sfofile, xml):
 			print stuff
 	
 	doc.appendChild(sfo)
-	print doc.toprettyxml(indent="  ")
 	file = open(xml, "wb" )
 	doc.writexml(file, '', '\t', '\n' )
 	file.close()
@@ -174,7 +172,7 @@ def align(num, alignment):
 def convertToSFO(xml, sfofile, forcetitle, forceappid):
 	dom = parse(xml)
 	nodes = dom.getElementsByTagName("value")
-	kvs = {}
+	kvs = []
 	for node in nodes:
 		if node.hasAttributes():
 			type = None
@@ -186,14 +184,13 @@ def convertToSFO(xml, sfofile, forcetitle, forceappid):
 					name = node.attributes.item(i).value
 			if name != None and type != None:
 				if name == "TITLE" and forcetitle != None:
-					kvs[name] = forcetitle
+					kvs.append((name, forcetitle))
 				elif name == "TITLE_ID" and forceappid != None:
-					kvs[name] = forceappid
-				if type == "string":
-					kvs[name] = getText(node.childNodes)
+					kvs.append((name, forceappid))
+				elif type == "string":
+					kvs.append((name, getText(node.childNodes)))
 				elif type == "integer":
-					kvs[name] = int(getText(node.childNodes))
-	print kvs
+					kvs.append((name, int(getText(node.childNodes))))
 	header = Header()
 	header.magic = SFO_MAGIC
 	header.unk1 = 0x00000101
@@ -201,7 +198,7 @@ def convertToSFO(xml, sfofile, forcetitle, forceappid):
 	entries = []
 	keyoff = 0
 	valueoff = 0
-	for k,v in kvs.items():
+	for (k,v) in kvs:
 		entry = Entry()
 		entry.key_off   = keyoff
 		entry.unk1      = 4
@@ -212,7 +209,15 @@ def convertToSFO(xml, sfofile, forcetitle, forceappid):
 		else: 
 			entry.value_type = SFO_STRING
 			entry.value_len  = len(v) + 1
-			entry.padded_len = align(entry.value_len, 4) 
+			alignment = 4
+			if k == "TITLE":
+				alignment = 0x80
+			elif k == "LICENSE":
+				alignment = 0x200
+			elif k == "TITLE_ID":
+				alignment = 0x10
+				
+			entry.padded_len = align(entry.value_len, alignment) 
 		entry.value_off = valueoff
 		keyoff += len(k)+1
 		valueoff += entry.padded_len
@@ -225,16 +230,22 @@ def convertToSFO(xml, sfofile, forcetitle, forceappid):
 	file.write(header.pack())
 	for entry in entries:
 		file.write(entry.pack())
-	for k,v in kvs.items():
+	for k,v in kvs:
 		file.write(k + '\0')
 	file.write('\0' * keypad)
-	for k,v in kvs.items():
+	for k,v in kvs:
 		if isinstance(v, int):
 			file.write(struct.pack('<I', v))
-			print v
 		else:
+			alignment = 4
+			if k == "TITLE":
+				alignment = 0x80
+			elif k == "LICENSE":
+				alignment = 0x200
+			elif k == "TITLE_ID":
+				alignment = 0x10
 			file.write(v + '\0')
-			file.write('\0' * (align(len(v) + 1, 4) - (len(v) +1)))
+			file.write('\0' * (align(len(v) + 1, alignment) - (len(v) +1)))
 	file.close()
 def main():
 	global debug
@@ -251,8 +262,6 @@ def main():
 		return
 	if "python" in sys.argv[0]:
 		sys.argv = sys.argv[1:]
-	print sys.argv
-	print sys.argv[1:]
 	try:
 		opts, args = getopt.getopt(sys.argv[1:], "hdvpl:tf", ["help", "debug","version", "pretty", "list=", "toxml", "fromxml", "title=", "appid="])
 	except getopt.GetoptError:
@@ -273,13 +282,13 @@ def main():
 			debug = True
 		elif opt in ("-p", "--pretty"):
 			pretty = True
-		elif opt in ("-t", "toxml"):
+		elif opt in ("-t", "--toxml"):
 			toxml = True
-		elif opt in ("-f", "fromxml"):
+		elif opt in ("-f", "--fromxml"):
 			fromxml = True
-		elif opt in ("title"):
+		elif opt in ("--title"):
 			forcetitle = arg
-		elif opt in ("appid"):
+		elif opt in ("--appid"):
 			forceappid = arg
 		else:
 			usage()
